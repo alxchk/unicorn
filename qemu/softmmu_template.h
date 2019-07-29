@@ -120,7 +120,7 @@
 #endif
 
 /* macro to check the victim tlb */
-#define VICTIM_TLB_HIT(ty)                                              \
+#define VICTIM_TLB_HIT(ty)                                      \
     /* we are about to do a page table walk. our last hope is the             \
      * victim tlb. try to refill from the victim tlb before walking the       \
      * page table. */                                                         \
@@ -702,6 +702,7 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
         HOOK_FOREACH(uc, hook, UC_HOOK_MEM_WRITE_UNMAPPED) {
             if (!HOOK_BOUND_CHECK(hook, addr))
                 continue;
+
             if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_WRITE_UNMAPPED, addr, DATA_SIZE, val, hook->user_data)))
                 break;
         }
@@ -788,7 +789,8 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
     if (DATA_SIZE > 1
         && unlikely((addr & ~TARGET_PAGE_MASK) + DATA_SIZE - 1
                      >= TARGET_PAGE_SIZE)) {
-        int i;
+        int i, index2;
+        target_ulong page2, tlb_addr2;
     do_unaligned_access:
 #ifdef ALIGNED_ONLY
         cpu_unaligned_access(ENV_GET_CPU(env), addr, MMU_DATA_STORE,
@@ -798,6 +800,19 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
         cpu_exit(uc->current_cpu);
         return;
 #endif
+        /* Ensure the second page is in the TLB.  Note that the first page
+           is already guaranteed to be filled, and that the second page
+           cannot evict the first.  */
+
+        page2 = (addr + DATA_SIZE) & TARGET_PAGE_MASK;
+        index2 = (page2 >> TARGET_PAGE_BITS) & (CPU_TLB_SIZE - 1);
+        tlb_addr2 = env->tlb_table[mmu_idx][index2].addr_write;
+        if (page2 != (tlb_addr2 & (TARGET_PAGE_MASK | TLB_INVALID_MASK))
+            && !victim_tlb_hit_write(env, page2, mmu_idx, index2)) {
+            tlb_fill(ENV_GET_CPU(env), page2, MMU_DATA_STORE,
+                     mmu_idx, retaddr);
+        }
+
         /* XXX: not efficient, but simple */
         /* Note: relies on the fact that tlb_fill() does not remove the
          * previous page from the TLB cache.  */
@@ -947,7 +962,8 @@ void helper_be_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
     if (DATA_SIZE > 1
         && unlikely((addr & ~TARGET_PAGE_MASK) + DATA_SIZE - 1
                      >= TARGET_PAGE_SIZE)) {
-        int i;
+        int i, index2;
+        target_ulong page2, tlb_addr2;
     do_unaligned_access:
 #ifdef ALIGNED_ONLY
         cpu_unaligned_access(ENV_GET_CPU(env), addr, MMU_DATA_STORE,
@@ -957,10 +973,21 @@ void helper_be_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
         cpu_exit(uc->current_cpu);
         return;
 #endif
-        /* XXX: not efficient, but simple */
-        /* Note: relies on the fact that tlb_fill() does not remove the
-         * previous page from the TLB cache.  */
-        for (i = DATA_SIZE - 1; i >= 0; i--) {
+        /* Ensure the second page is in the TLB.  Note that the first page
+           is already guaranteed to be filled, and that the second page
+           cannot evict the first.  */
+        page2 = (addr + DATA_SIZE) & TARGET_PAGE_MASK;
+        index2 = (page2 >> TARGET_PAGE_BITS) & (CPU_TLB_SIZE - 1);
+        tlb_addr2 = env->tlb_table[mmu_idx][index2].addr_write;
+        if (page2 != (tlb_addr2 & (TARGET_PAGE_MASK | TLB_INVALID_MASK))
+            && !victim_tlb_hit_write(env, page2, mmu_idx, index2)) {
+            tlb_fill(ENV_GET_CPU(env), page2, MMU_DATA_STORE,
+                     mmu_idx, retaddr);
+        }
+
+        /* This loop must go in the forward direction to avoid issues
+           with self-modifying code.  */
+        for (i = 0; i < DATA_SIZE; ++i) {
             /* Big-endian extract.  */
             uint8_t val8 = (uint8_t)(val >> (((DATA_SIZE - 1) * 8) - (i * 8)));
             /* Note the adjustment at the beginning of the function.
