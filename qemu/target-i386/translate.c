@@ -4973,7 +4973,7 @@ static void restore_eflags(DisasContext *s, TCGContext *tcg_ctx)
     TCGv_ptr cpu_env = tcg_ctx->cpu_env;
 
     tcg_gen_ld_tl(tcg_ctx, *cpu_T[0], cpu_env, offsetof(CPUX86State, eflags));
-    gen_helper_write_eflags(tcg_ctx, cpu_env, *cpu_T[0], 
+    gen_helper_write_eflags(tcg_ctx, cpu_env, *cpu_T[0],
             tcg_const_i32(tcg_ctx, (TF_MASK | AC_MASK | ID_MASK | NT_MASK) & 0xffff));
     set_cc_op(s, CC_OP_EFLAGS);
 }
@@ -5050,6 +5050,13 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
     s->vex_l = 0;
     s->vex_v = 0;
  next_byte:
+    /* x86 has an upper limit of 15 bytes for an instruction. Since we
+     * do not want to decode and generate IR for an illegal
+     * instruction, the following check limits the instruction size to
+     * 25 bytes: 14 prefix + 1 opc + 6 (modrm+sib+ofs) + 4 imm */
+    if (s->pc - pc_start > 14) {
+        goto illegal_op;
+    }
     b = cpu_ldub_code(env, s->pc);
     s->pc++;
     /* Collect prefixes.  */
@@ -6363,7 +6370,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         if (mod != 3) {
             /* memory op */
             gen_lea_modrm(env, s, modrm);
-            
+
             if( (op >= 0x00 && op <= 0x07) || /* fxxxs */
                 (op >= 0x10 && op <= 0x17) || /* fixxxl */
                 (op >= 0x20 && op <= 0x27) || /* fxxxl */
@@ -8746,6 +8753,7 @@ static inline void gen_intermediate_code_internal(uint8_t *gen_opc_cc_op,
         /* stop translation if indicated */
         if (dc->is_jmp)
             break;
+
         /* if single step mode, we generate only one instruction and
            generate an exception */
         /* if irq were inhibited with HF_INHIBIT_IRQ_MASK, we clear
@@ -8761,6 +8769,13 @@ static inline void gen_intermediate_code_internal(uint8_t *gen_opc_cc_op,
         if (tcg_ctx->gen_opc_ptr >= gen_opc_end ||
             (pc_ptr - pc_start) >= (TARGET_PAGE_SIZE - 32) ||
             num_insns >= max_insns) {
+            gen_jmp_im(dc, pc_ptr - dc->cs_base);
+            gen_eob(dc);
+            block_full = true;
+            break;
+        }
+
+        if (cpu_slow_self_unpack_enabled(cs)) {
             gen_jmp_im(dc, pc_ptr - dc->cs_base);
             gen_eob(dc);
             block_full = true;

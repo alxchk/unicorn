@@ -351,10 +351,18 @@ uc_err uc_close(uc_engine *uc)
     // finally, free uc itself.
     memset(uc, 0, sizeof(*uc));
     free(uc);
-    
+
     return UC_ERR_OK;
 }
 
+UNICORN_EXPORT
+void uc_set_slow_self_unpack(uc_engine *uc, bool state)
+{
+    uc->slow_self_unpack = state;
+    if (uc->current_cpu) {
+        cpu_set_slow_self_unpack(uc, state);
+    }
+}
 
 UNICORN_EXPORT
 uc_err uc_reg_read_batch(uc_engine *uc, int *ids, void **vals, int count)
@@ -612,6 +620,8 @@ uc_err uc_emu_start(uc_engine* uc, uint64_t begin, uint64_t until, uint64_t time
         if (err != UC_ERR_OK) {
             return err;
         }
+
+        uc_set_slow_self_unpack(uc, true);
     }
 
     uc->addr_end = until;
@@ -830,7 +840,7 @@ static bool split_region(struct uc_struct *uc, MemoryRegion *mr, uint64_t addres
 
     // RAM_PREALLOC is not defined outside exec.c and I didn't feel like
     // moving it
-	prealloc = !!(block->flags & 1);
+    prealloc = !!(block->flags & 1);
 
     if (block->flags & 1) {
         backup = block->host;

@@ -157,6 +157,7 @@ static void cpu_common_reset(CPUState *cpu)
         log_cpu_state(cpu, cc->reset_dump_flags);
     }
 
+    cpu->slow_self_unpack = false;
     cpu->interrupt_request = 0;
     cpu->current_tb = NULL;
     cpu->halted = 0;
